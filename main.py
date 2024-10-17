@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 from scipy.spatial import distance
+import requests
+import json
 
 # Load YOLOv model
 model = YOLO("yolo11n.pt")
@@ -10,7 +12,8 @@ model = YOLO("yolo11n.pt")
 cap = cv2.VideoCapture(r"C:\Dta\Proyectos Mau\AI Futbol Stadistics Assistant V1\darknet\data\157A6151.MP4")
 
 person_data = {}
-next_person_id = 1
+cumulative_person_data = {}
+next_person_id = 0
 
 def get_closest_person_id(center_x, center_y, person_data, threshold=50):
     min_dist = float('inf')
@@ -32,6 +35,14 @@ while cap.isOpened():
     detections = results[0].boxes.data.cpu().numpy()  # Get detections as numpy array
 
     current_frame_person_data = {}
+    for detection in detections:
+        x1, y1, x2, y2 = detection[:4]
+        confidence = detection[4] if len(detection) > 4 else 0.0
+        class_id = detection[5] if len(detection) > 5 else -1
+        if confidence > 0.2 and int(class_id) == 37:  # Class ID 37 for surfboard
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (51, 204, 255), 2)  # Light green rectangle
+            cv2.putText(frame, f"Tabla Surf: {confidence:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (51, 204, 255), 2)  # Light orange color
 
     for detection in detections:
         x1, y1, x2, y2 = detection[:4]
@@ -67,7 +78,7 @@ while cap.isOpened():
                 'prev_x': center_x,
                 'prev_y': center_y,
                 'total_distance_m': total_distance_m,
-                'total_time_s': total_time_s
+                'total_time_s': total_time_s,
             }
 
             # Only draw the bounding box if the confidence is above a higher threshold
@@ -75,14 +86,40 @@ while cap.isOpened():
             cv2.putText(frame, f"Persona: {person_id} CF: {confidence:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
             # Draw distance and velocity below each person
-            cv2.putText(frame, f"Distancia: {total_distance_m:.2f} m", (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            cv2.putText(frame, f"Velocidad: {average_velocity_kmph:.2f} km/h", (x1, y2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            cv2.putText(frame, f"Distancia: {total_distance_m:.2f} m", (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            cv2.putText(frame, f"Velocidad: {average_velocity_kmph:.2f} km/h", (x1, y2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
     person_data = current_frame_person_data
+
+    for person_id, data in current_frame_person_data.items():
+        if person_id in cumulative_person_data:
+            cumulative_person_data[person_id]['total_distance_m'] = data['total_distance_m']
+            cumulative_person_data[person_id]['total_time_s'] += data['total_time_s']
+            # Update max average velocity if current average is higher
+            current_avg_velocity_kmph = (data['total_distance_m'] / data['total_time_s']) * 3.6
+            cumulative_person_data[person_id]['max_avg_velocity_kmph'] = max(cumulative_person_data[person_id].get('max_avg_velocity_kmph', 0), current_avg_velocity_kmph)
+        else:
+            cumulative_person_data[person_id] = data
+            cumulative_person_data[person_id]['max_avg_velocity_kmph'] = (data['total_distance_m'] / data['total_time_s']) * 3.6
 
     cv2.imshow("Video", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
+
+# Show summary of each person at the end
+for person_id, data in cumulative_person_data.items():
+    total_distance_m = data['total_distance_m']
+    total_time_s = data['total_time_s']
+    average_velocity_mps = total_distance_m / total_time_s
+    average_velocity_kmph = average_velocity_mps * 3.6  # Convert m/s to km/h
+    max_avg_velocity_kmph = data['max_avg_velocity_kmph']
+    
+    if total_time_s > 1:
+        print(f"Person ID: {person_id}")
+        print(f"  Total Distance: {total_distance_m:.2f} meters")
+        print(f"  Total Time: {total_time_s:.2f} seconds")
+        print(f"  Max Average Velocity: {max_avg_velocity_kmph:.2f} km/h")
+        print()
 
 cap.release()
 cv2.destroyAllWindows()
